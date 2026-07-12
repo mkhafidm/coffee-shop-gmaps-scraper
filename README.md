@@ -1,30 +1,33 @@
-# Google Maps Scraper
+# Coffee Shop Google Maps Scraper
 
-Parallel scraper for Google Maps business data using `undetected-chromedriver`.  
+Parallel scraper for coffee shop business data from Google Maps using `undetected-chromedriver`.  
 Extracts overview, reviews, and about section.
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/yourusername/gmaps-scraper.git
-cd gmaps-scraper
+git clone https://github.com/mkhafidm/coffee-shop-gmaps-scraper.git
+cd coffee-shop-gmaps-scraper
 pip install -r requirements.txt
 python main.py
-Edit config.py to set CHROME_VERSION_MAIN, MAX_WORKERS, and file paths.
+```
 
-Usage
-python main.py → runs test (2 workers, 5 places each)
+Edit `config.py` to set `CHROME_VERSION_MAIN`, `MAX_WORKERS`, and file paths.
 
-python main.py --workers 2 --batch-size 60 → production with 2 workers
+### Usage
 
-python main.py --start 500 → resume from place index 500
+```bash
+python main.py                    
+python main.py --workers 2 --batch-size 100   # 2 workers
+python main.py --start 500        # resume from place index 500
+```
 
-Notes
-Driver restarts every 15 places to free memory
+### Notes
 
-Reviews are limited to 50 per place
+- Driver restarts every 15 places to free memory
+- Reviews are limited to 50 per place
+- Output is saved as Parquet in `data/output/`
 
-Output is saved as Parquet in data/output/
+### Disclaimer
 
-Disclaimer
-For educational purposes only. Users are responsible for complying with Google's ToS.
+For educational purposes only. Users are responsible for complying with Google's Terms of Service.
