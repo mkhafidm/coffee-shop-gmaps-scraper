@@ -1,0 +1,5 @@
+pandas==3.0.3
+pyarrow==20.0.0
+undetected-chromedriver
+selenium
+beautifulsoup4
