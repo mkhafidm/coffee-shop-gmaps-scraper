@@ -1,10 +1,13 @@
 import time
 import random
+import logging
 from typing import Optional
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from src.utils import retry_on_failure
+
+logger = logging.getLogger(__name__)
 
 
 def parse_status_from_icon(icon_classes: str) -> Optional[bool]:
@@ -72,8 +75,9 @@ def scrape_about(driver, place_id):
                     "raw_aria_label": raw_label,
                     "available": is_available,
                 })
-        except Exception:
+        except Exception as e:
             # Skip this section if structure is unexpected
+            logger.debug(f"Could not parse about section '{section_title}' for {place_id}: {e}")
             continue
 
     return {"about": about_info}

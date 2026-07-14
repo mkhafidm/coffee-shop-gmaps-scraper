@@ -1,10 +1,13 @@
 import re
 import time
 import random
+import logging
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from src.utils import retry_on_failure
+
+logger = logging.getLogger(__name__)
 
 
 @retry_on_failure(max_retries=5, task_name="review")
@@ -32,7 +35,7 @@ def scrape_review(driver, place_id, max_samples=50):
         review_tab.click()
         time.sleep(random.uniform(2, 4))
     except Exception as e:
-        print(f"Failed to click Reviews tab: {e}")
+        logger.warning(f"Failed to click Reviews tab for {place_id}: {e}")
         return {
             "rating": None,
             "total_reviews": None,
@@ -46,16 +49,16 @@ def scrape_review(driver, place_id, max_samples=50):
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.CLASS_NAME, 'PPCwl'))
         )
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Reviews container not found for {place_id}: {e}")
 
     # Rating
     rating = None
     try:
         rating_el = driver.find_element(By.CSS_SELECTOR, 'div.fontDisplayLarge')
         rating = rating_el.text.strip()
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Could not extract rating for {place_id}: {e}")
 
     # Total reviews count
     total_reviews = None
@@ -66,8 +69,8 @@ def scrape_review(driver, place_id, max_samples=50):
             if 'review' in text.lower():
                 total_reviews = text
                 break
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Could not extract total_reviews for {place_id}: {e}")
 
     # If zero reviews, return early
     total_review_count = 0
@@ -101,10 +104,11 @@ def scrape_review(driver, place_id, max_samples=50):
                 count_text = count_el.text.strip().replace(',', '')
                 if feature and count_text.isdigit():
                     keyword_tags[feature] = int(count_text)
-            except:
+            except Exception as e:
+                logger.debug(f"Could not parse a keyword tag button for {place_id}: {e}")
                 continue
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Could not extract keyword_tags for {place_id}: {e}")
 
     # Sort by Newest
     try:
@@ -122,32 +126,32 @@ def scrape_review(driver, place_id, max_samples=50):
         newest_option.click()
         time.sleep(random.uniform(2, 4))
     except Exception as e:
-        print(f"Failed to sort by Newest: {e}. Proceeding with default.")
+        logger.warning(f"Failed to sort by Newest for {place_id}: {e}. Proceeding with default.")
 
     # Helper to parse a review card
     def parse_card(card):
         try:
             name = card.find_element(By.CSS_SELECTOR, 'div.d4r55').text.strip()
-        except:
+        except Exception:
             name = ""
         try:
             aria_label = card.find_element(By.CSS_SELECTOR, 'span.kvMYJc').get_attribute('aria-label')
             m = re.search(r'(\d+)\s+stars?', aria_label or "")
             rating_val = int(m.group(1)) if m else 0
-        except:
+        except Exception:
             rating_val = 0
         try:
             text = card.find_element(By.CSS_SELECTOR, 'span.wiI7pd').text.strip()
-        except:
+        except Exception:
             text = ""
         try:
             date = card.find_element(By.CSS_SELECTOR, 'span.rsqaWe').text.strip()
-        except:
+        except Exception:
             date = ""
         try:
             likes_txt = card.find_element(By.CSS_SELECTOR, 'span.pkWtMe').text.strip()
             likes = int(likes_txt) if likes_txt.isdigit() else 0
-        except:
+        except Exception:
             likes = 0
 
         if not name and not text:
@@ -165,10 +169,10 @@ def scrape_review(driver, place_id, max_samples=50):
     # Locate scroll container
     try:
         scroll_container = driver.find_element(By.CSS_SELECTOR, 'div.m6QErb.DxyBCb.kA9KIf.dS8AEf')
-    except:
+    except Exception:
         try:
             scroll_container = driver.find_element(By.CSS_SELECTOR, 'div[role="main"] .m6QErb.XiKgde')
-        except:
+        except Exception:
             scroll_container = driver.find_element(By.CSS_SELECTOR, 'div.m6QErb.DxyBCb')
 
     collected = {}
@@ -189,12 +193,12 @@ def scrape_review(driver, place_id, max_samples=50):
         added = len(collected) - before
 
         if len(collected) >= max_samples:
-            print(f"Target {max_samples} reviews reached. Stopping.")
+            logger.info(f"Target {max_samples} reviews reached for {place_id}. Stopping.")
             break
 
         no_new_count = no_new_count + 1 if added == 0 else 0
         if no_new_count >= no_new_limit:
-            print(f"No new reviews after {no_new_limit} scrolls. Stopping.")
+            logger.info(f"No new reviews after {no_new_limit} scrolls for {place_id}. Stopping.")
             break
 
         # Random scroll pattern
