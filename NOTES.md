@@ -1,4 +1,3 @@
-```markdown
 # Notes – Google Maps Scraper
 
 ## Flow
@@ -15,9 +14,10 @@
      - **Overview**: name, rating, total reviews, price range, phone, links.
      - **Reviews**: rating, total count, keyword tags, up to 50 latest reviews.
      - **About**: amenities/facilities with availability status.
-5. Buffers data every 5 places, then flushes to Parquet.
-6. Restarts driver every 15 places to prevent memory bloat.
-7. Logs are saved in `data/output/logs/`.
+5. Data is buffered in memory and flushed to **shard** Parquet files every `FLUSH_INTERVAL` places (default 25).
+6. At the end of the batch, all shards for each data type (overview, review, about) are merged into a single final `.parquet` file, then the shards are deleted.
+7. Driver restarts every `RESTART_EVERY` places (default 15) to prevent memory bloat.
+8. Logs are saved in `data/output/logs/`.
 
 ## Key Configs
 
@@ -25,8 +25,8 @@
 |-----|---------|-------------|
 | `CHROME_VERSION_MAIN` | 135 | Must match installed Chrome version |
 | `MAX_WORKERS` | 2 | Parallel workers (safe for 8-16GB RAM) |
-| `BATCH_SIZE` | 60 | Places per batch |
-| `FLUSH_INTERVAL` | 5 | Flush to disk every N places |
+| `BATCH_SIZE` | 100 | Places per batch |
+| `FLUSH_INTERVAL` | 25 | Flush to disk every N places (creates shard) |
 | `RESTART_EVERY` | 15 | Restart driver every N places |
 
 ## Optimizations

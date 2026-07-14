@@ -1,30 +1,33 @@
-# Google Maps Scraper
+# Coffee Shop Google Maps Scraper
 
-Parallel scraper for Google Maps business data using `undetected-chromedriver`.  
+Parallel scraper for coffee shop business data from Google Maps using `undetected-chromedriver`.  
 Extracts overview, reviews, and about section.
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/yourusername/gmaps-scraper.git
-cd gmaps-scraper
+git clone https://github.com/mkhafidm/coffee-shop-gmaps-scraper.git
+cd coffee-shop-gmaps-scraper
 pip install -r requirements.txt
 python main.py
-Edit config.py to set CHROME_VERSION_MAIN, MAX_WORKERS, and file paths.
+```
 
-Usage
-python main.py → runs test (2 workers, 5 places each)
+Edit `config.py` to set `CHROME_VERSION_MAIN`, `MAX_WORKERS`, and file paths.
 
-python main.py --workers 2 --batch-size 60 → production with 2 workers
+### Usage
 
-python main.py --start 500 → resume from place index 500
+| Command                                       | What it does                        |
+| :-------------------------------------------- | :---------------------------------- |
+| `python main.py`                              | Run with default config.            |
+| `python main.py --workers 4 --batch-size 100` | Use 4 workers, 50 places per batch. |
+| `python main.py --start 500`                  | Resume from place index 500.        |
+| `python main.py --start 1000 --end 2000`      | Scrape a specific index range.      |
 
-Notes
-Driver restarts every 15 places to free memory
+### Output
+Results go to `data/output/`:
+- `overview/`, `review/`, `about/` → final `.parquet` files per batch.
+Temporary `_shard*.parquet` files are auto-merged and deleted after each batch finishes.
 
-Reviews are limited to 50 per place
+### Disclaimer
 
-Output is saved as Parquet in data/output/
-
-Disclaimer
-For educational purposes only. Users are responsible for complying with Google's ToS.
+For educational purposes only. Users are responsible for complying with Google's Terms of Service.
