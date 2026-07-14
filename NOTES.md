@@ -62,3 +62,11 @@ Each Parquet file contains:
 - `overview`: dict with name, rating, price_range, phone, links
 - `review`: dict with rating, total_reviews, keyword_tags, reviews list
 - `about`: dict with facility/amenity categories and availability
+
+## Resuming a run
+- Do NOT pass `--batch-start` when resuming — let the script auto-detect
+  the next batch number from existing finalized files.
+- `--batch-start` is only for the very first run of a fresh output directory,
+  or if you intentionally want to renumber.
+- On every run, leftover shard files from an interrupted session are
+  automatically merged into finalized batches before new work starts.

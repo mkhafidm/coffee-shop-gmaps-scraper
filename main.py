@@ -36,9 +36,7 @@ def split_into_batches(items: List[Any], batch_size: int):
 def load_done_place_ids(output_dir: str) -> set:
     """
     Scan finalized (non-shard) overview parquet files and return the set of
-    place_ids already processed. A row existing is enough to count as "done" -
-    we don't distinguish success/failure here, to avoid re-scraping places
-    that consistently fail.
+    place_ids already processed.
     """
     pattern = os.path.join(output_dir, "overview", "batch_*_overview.parquet")
     done = set()
@@ -81,7 +79,7 @@ def _build_driver(worker_id: int):
     options.add_argument(f"--user-agent={user_agent}")
     if proxy:
         options.add_argument(f"--proxy-server={proxy}")
-    
+
     options.add_argument("--lang=en-US")
     options.add_argument("--accept-lang=en-US,en")
     options.add_argument("--disable-gpu")
@@ -110,10 +108,7 @@ def _build_driver(worker_id: int):
 
 
 def get_driver(worker_id: int = 0, max_attempts: int = 3):
-    """
-    Create an undetected Chrome driver, retrying a few times if driver
-    creation itself fails (e.g. transient race condition between workers).
-    """
+    """Create an undetected Chrome driver, retrying a few times on failure."""
     last_exc = None
     for attempt in range(max_attempts):
         try:
@@ -138,6 +133,28 @@ def setup_logger(batch_number: int, output_dir: str) -> logging.Logger:
     file_handler = logging.FileHandler(
         os.path.join(log_dir, f"batch_{batch_number:03}.log")
     )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+    logger.setLevel(logging.INFO)
+    return logger
+
+
+def setup_startup_logger(output_dir: str) -> logging.Logger:
+    """Logger for startup processes (orphan shard finalization)."""
+    log_dir = os.path.join(output_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+
+    logger = logging.getLogger("startup")
+    if logger.handlers:
+        return logger
+
+    formatter = logging.Formatter("%(asctime)s - [startup] %(message)s")
+    file_handler = logging.FileHandler(os.path.join(log_dir, "startup.log"))
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
@@ -177,6 +194,48 @@ def merge_shards_and_cleanup(output_dir: str, data_type: str, batch_number: int,
         logger.error(f"Failed to verify merged file for {data_type} batch {batch_number}: {e}. Keeping shards.")
 
 
+def finalize_orphan_shards(output_dir: str, logger: logging.Logger):
+    """
+    Merge leftover shard files from interrupted runs before starting new work.
+    This ensures load_done_place_ids() and get_next_batch_number() always see
+    accurate state.
+    """
+    for data_type in ["overview", "review", "about"]:
+        data_dir = os.path.join(output_dir, data_type)
+        pattern = os.path.join(data_dir, f"batch_*_{data_type}_shard*.parquet")
+        shard_files = glob.glob(pattern)
+
+        if not shard_files:
+            continue
+
+        batch_numbers = set()
+        for f in shard_files:
+            match = re.match(
+                rf"batch_(\d+)_{data_type}_shard\d+\.parquet",
+                os.path.basename(f),
+            )
+            if match:
+                batch_numbers.add(int(match.group(1)))
+
+        if not batch_numbers:
+            continue
+
+        logger.info(
+            f"Found orphan shards for {data_type}, "
+            f"batch numbers={sorted(batch_numbers)} -> finalizing..."
+        )
+
+        for bn in sorted(batch_numbers):
+            try:
+                merge_shards_and_cleanup(output_dir, data_type, bn, logger)
+                logger.info(f"Finalized orphan shard(s) for {data_type} batch {bn}")
+            except Exception as e:
+                logger.error(
+                    f"Failed to finalize orphan shard {data_type} batch {bn}: {e}. "
+                    f"Shard kept, will retry next run."
+                )
+
+
 # -----------------------------------------------------------------------------
 # Batch processing
 # -----------------------------------------------------------------------------
@@ -198,8 +257,7 @@ def process_batch(
     into one final parquet file per data type, and the shards are deleted.
 
     If the browser crashes on a place, the driver is restarted and the same
-    place is retried, up to `max_crash_retries` times, before giving up on
-    that place and moving on.
+    place is retried, up to `max_crash_retries` times, before giving up.
     """
     logger = setup_logger(batch_number, output_dir)
 
@@ -262,11 +320,12 @@ def process_batch(
                     time.sleep(1)
                     utils.handle_consent_popup(driver)
 
+                    # Check if place is valid
                     try:
                         h1 = driver.find_element(By.CSS_SELECTOR, "h1.DUwDvf.lfPIob")
-                        if not h1.text.strip():  
+                        if not h1.text.strip():
                             raise Exception
-                    except Exception:           
+                    except Exception:
                         logger.warning(f"Place {place_id} invalid, skipping")
                         buffers["overview"].append({"place_id": place_id, "overview": {"error": "invalid_place"}})
                         buffers["review"].append({"place_id": place_id, "review": {"error": "invalid_place"}})
@@ -328,10 +387,7 @@ def process_batch(
 
 
 def run_batch_worker(args: Tuple) -> Tuple[int, str, Optional[str]]:
-    """
-    Wrapper for process_batch to be used with ProcessPoolExecutor.
-    Returns (batch_number, status, error_message).
-    """
+    """Wrapper for process_batch to be used with ProcessPoolExecutor."""
     batch, batch_number, output_dir, worker_index = args
     logger = setup_logger(batch_number, output_dir)
 
@@ -359,13 +415,22 @@ def main():
     """Production runner with command-line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", default=config.INPUT_PARQUET, help="Input Parquet file path")
-    parser.add_argument("--start", type=int, default=config.START_INDEX, help="Start index (inclusive) - used to split work across notebooks/sessions")
-    parser.add_argument("--end", type=int, default=None, help="End index (exclusive), None = until the end of the list")
+    parser.add_argument("--start", type=int, default=config.START_INDEX, help="Start index (inclusive)")
+    parser.add_argument("--end", type=int, default=None, help="End index (exclusive), None = until end")
     parser.add_argument("--batch-size", type=int, default=config.BATCH_SIZE, help="Size of each batch")
     parser.add_argument("--workers", type=int, default=config.MAX_WORKERS, help="Number of parallel workers")
     parser.add_argument("--output", default=config.OUTPUT_DIR_BASE, help="Output directory")
-    parser.add_argument("--batch-start", type=int, default=None, help="Override starting batch number")
+    parser.add_argument(
+        "--batch-start",
+        type=int,
+        default=None,
+        help="Override starting batch number. Only for fresh output directory or renumbering.",
+    )
     args = parser.parse_args()
+
+    # Finalize any leftover shards from interrupted previous runs
+    startup_logger = setup_startup_logger(args.output)
+    finalize_orphan_shards(args.output, startup_logger)
 
     all_place_ids = load_place_ids(args.input)
     print(f"Total place_ids: {len(all_place_ids)}")
