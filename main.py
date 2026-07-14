@@ -7,13 +7,14 @@ import time
 import json
 import logging
 import argparse
+import pandas as pd
+import config
+import undetected_chromedriver as uc
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import List, Tuple, Any, Optional, Dict
-import pandas as pd
-import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
 from src import overview, review, about, utils
 from src.utils import BrowserCrashedError
-import config
 
 
 # -----------------------------------------------------------------------------
@@ -252,12 +253,25 @@ def process_batch(
 
             while not place_done:
                 try:
-                    url = f"https://www.google.com/maps/place/?q=place_id:{place_id}"
+                    url = f"https://www.google.com/maps/place/?q=place_id:{place_id}&hl=en"
                     driver.get(url)
                     time.sleep(random.uniform(1, 2))
                     driver.refresh()
                     time.sleep(random.uniform(2, 4))
                     utils.handle_consent_popup(driver)
+                    time.sleep(1)
+                    utils.handle_consent_popup(driver)
+
+                    try:
+                        h1 = driver.find_element(By.CSS_SELECTOR, "h1.DUwDvf.lfPIob")
+                        if not h1.text.strip():  
+                            raise Exception
+                    except Exception:           
+                        logger.warning(f"Place {place_id} invalid, skipping")
+                        buffers["overview"].append({"place_id": place_id, "overview": {"error": "invalid_place"}})
+                        buffers["review"].append({"place_id": place_id, "review": {"error": "invalid_place"}})
+                        buffers["about"].append({"place_id": place_id, "about": {"error": "invalid_place"}})
+                        place_done = True
 
                     ov = overview.scrape_overview(driver, place_id) or {"error": "scrape_failed"}
                     if ov.get("error"):
@@ -278,7 +292,7 @@ def process_batch(
                 except BrowserCrashedError as e:
                     crash_attempts += 1
                     logger.error(
-                        f"💥 Browser crashed on {place_id} "
+                        f"Browser crashed on {place_id} "
                         f"(attempt {crash_attempts}/{max_crash_retries}): {e}"
                     )
                     if crash_attempts >= max_crash_retries:
