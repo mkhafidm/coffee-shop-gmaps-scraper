@@ -272,6 +272,7 @@ def process_batch(
                         buffers["review"].append({"place_id": place_id, "review": {"error": "invalid_place"}})
                         buffers["about"].append({"place_id": place_id, "about": {"error": "invalid_place"}})
                         place_done = True
+                        continue
 
                     ov = overview.scrape_overview(driver, place_id) or {"error": "scrape_failed"}
                     if ov.get("error"):
