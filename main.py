@@ -33,37 +33,6 @@ def split_into_batches(items: List[Any], batch_size: int):
         yield items[i:i + batch_size]
 
 
-def load_done_place_ids(output_dir: str) -> set:
-    """
-    Scan finalized (non-shard) overview parquet files and return the set of
-    place_ids already processed.
-    """
-    pattern = os.path.join(output_dir, "overview", "batch_*_overview.parquet")
-    done = set()
-    for f in glob.glob(pattern):
-        if "_shard" in f:
-            continue
-        try:
-            df = pd.read_parquet(f, columns=["place_id"])
-            done.update(df["place_id"].tolist())
-        except Exception:
-            continue
-    return done
-
-
-def get_next_batch_number(output_dir: str) -> int:
-    """Find the highest existing finalized batch number and return the next one."""
-    pattern = os.path.join(output_dir, "overview", "batch_*_overview.parquet")
-    max_num = 0
-    for f in glob.glob(pattern):
-        if "_shard" in f:
-            continue
-        match = re.match(r"batch_(\d+)_overview\.parquet", os.path.basename(f))
-        if match:
-            max_num = max(max_num, int(match.group(1)))
-    return max_num + 1
-
-
 # -----------------------------------------------------------------------------
 # Driver and logger setup
 # -----------------------------------------------------------------------------
@@ -197,8 +166,7 @@ def merge_shards_and_cleanup(output_dir: str, data_type: str, batch_number: int,
 def finalize_orphan_shards(output_dir: str, logger: logging.Logger):
     """
     Merge leftover shard files from interrupted runs before starting new work.
-    This ensures load_done_place_ids() and get_next_batch_number() always see
-    accurate state.
+    This ensures we don't have stale shards hanging around.
     """
     for data_type in ["overview", "review", "about"]:
         data_dir = os.path.join(output_dir, data_type)
@@ -250,14 +218,8 @@ def process_batch(
     max_crash_retries: int = 3,
 ):
     """
-    Scrape a batch of places.
-
-    Data is buffered in memory and flushed to a new shard file every
-    `flush_interval` places. At the end of the batch, all shards are merged
-    into one final parquet file per data type, and the shards are deleted.
-
-    If the browser crashes on a place, the driver is restarted and the same
-    place is retried, up to `max_crash_retries` times, before giving up.
+    Scrape a batch of places. Skips place_ids that already exist in the final
+    files for this batch, so we can resume without redoing work.
     """
     logger = setup_logger(batch_number, output_dir)
 
@@ -269,6 +231,33 @@ def process_batch(
     for d in dirs.values():
         os.makedirs(d, exist_ok=True)
 
+    # Load existing place_ids from this batch's final files (if any)
+    existing_place_ids = set()
+    for data_type in ["overview", "review", "about"]:
+        final_path = os.path.join(dirs[data_type], f"batch_{batch_number:03}_{data_type}.parquet")
+        if os.path.exists(final_path):
+            try:
+                df = pd.read_parquet(final_path, columns=["place_id"])
+                existing_place_ids.update(df["place_id"].tolist())
+            except Exception as e:
+                logger.warning(f"Could not read existing {data_type} file: {e}")
+
+    if existing_place_ids:
+        # Filter out already-done place_ids
+        original_len = len(batch)
+        batch = [pid for pid in batch if pid not in existing_place_ids]
+        logger.info(
+            f"Batch {batch_number}: {original_len - len(batch)} already done, "
+            f"{len(batch)} remaining to process"
+        )
+    else:
+        logger.info(f"Batch {batch_number}: starting fresh ({len(batch)} places)")
+
+    if not batch:
+        logger.info(f"Batch {batch_number} already complete, skipping")
+        return
+
+    # Setup buffers and driver
     buffers: Dict[str, List[dict]] = {"overview": [], "review": [], "about": []}
     shard_counters: Dict[str, int] = {"overview": 0, "review": 0, "about": 0}
 
@@ -295,6 +284,7 @@ def process_batch(
         time.sleep(3)
         driver = get_driver(worker_id=worker_index)
 
+    # Scrape
     try:
         idx = 1
         while idx <= len(batch):
@@ -408,11 +398,10 @@ def run_batch_worker(args: Tuple) -> Tuple[int, str, Optional[str]]:
 
 
 # -----------------------------------------------------------------------------
-# Main entry points
+# Main entry point
 # -----------------------------------------------------------------------------
 
 def main():
-    """Production runner with command-line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", default=config.INPUT_PARQUET, help="Input Parquet file path")
     parser.add_argument("--start", type=int, default=config.START_INDEX, help="Start index (inclusive)")
@@ -424,64 +413,40 @@ def main():
         "--batch-start",
         type=int,
         default=None,
-        help="Override starting batch number. Only for fresh output directory or renumbering.",
+        help="Starting batch number (auto-calculated from --start if not given)",
     )
     args = parser.parse_args()
 
-    # Finalize any leftover shards from interrupted previous runs
+    # --- Clean up orphan shards from previous runs ---
     startup_logger = setup_startup_logger(args.output)
     finalize_orphan_shards(args.output, startup_logger)
 
+    # --- Load all place IDs for the assigned range ---
     all_place_ids = load_place_ids(args.input)
-    print(f"Total place_ids: {len(all_place_ids)}")
-
     end_idx = args.end if args.end is not None else len(all_place_ids)
     slice_for_this_run = all_place_ids[args.start:end_idx]
+    print(f"Total place_ids: {len(all_place_ids)}")
     print(f"Assigned range: [{args.start}:{end_idx}] -> {len(slice_for_this_run)} place_ids")
 
-    done_place_ids = load_done_place_ids(args.output)
-    print(f"Already done (in this output dir): {len(done_place_ids)}")
+    # --- Split into batches ---
+    batches = list(split_into_batches(slice_for_this_run, args.batch_size))
+    print(f"Number of batches: {len(batches)}")
 
-    remaining = [pid for pid in slice_for_this_run if pid not in done_place_ids]
-    print(f"Remaining to process: {len(remaining)}")
-
-    batches = list(split_into_batches(remaining, args.batch_size))
-    start_batch_number = args.batch_start if args.batch_start is not None else get_next_batch_number(args.output)
+    # --- Determine starting batch number ---
+    if args.batch_start is not None:
+        start_batch_number = args.batch_start
+    else:
+        start_batch_number = (args.start // args.batch_size) + 1
     print(f"Batch numbering starts at: {start_batch_number}")
 
+    # --- Create tasks ---
     tasks = []
     for i, batch in enumerate(batches):
         batch_number = start_batch_number + i
-        worker_index = i
-        tasks.append((batch, batch_number, args.output, worker_index))
+        tasks.append((batch, batch_number, args.output, i))
 
+    # --- Run workers ---
     with ProcessPoolExecutor(max_workers=args.workers) as executor:
-        futures = {executor.submit(run_batch_worker, task): task[1] for task in tasks}
-        for future in as_completed(futures):
-            batch_num, status, error = future.result()
-            if status == "success":
-                print(f"✅ Batch #{batch_num} done")
-            else:
-                print(f"❌ Batch #{batch_num} failed: {error}")
-
-
-def test_small():
-    """Test with a single worker on 5 places."""
-    all_ids = load_place_ids(config.INPUT_PARQUET)
-    process_batch(all_ids[:5], batch_number=999, output_dir=config.OUTPUT_DIR_BASE)
-
-
-def test_small_parallel(n_workers: int = 2, places_per_worker: int = 5):
-    """Test with parallel workers on a small dataset."""
-    all_place_ids = load_place_ids(config.INPUT_PARQUET)
-    tasks = []
-    for i in range(n_workers):
-        start = i * places_per_worker
-        end = start + places_per_worker
-        batch = all_place_ids[start:end]
-        tasks.append((batch, 900 + i, config.OUTPUT_DIR_BASE, i))
-
-    with ProcessPoolExecutor(max_workers=n_workers) as executor:
         futures = {executor.submit(run_batch_worker, task): task[1] for task in tasks}
         for future in as_completed(futures):
             batch_num, status, error = future.result()
@@ -493,4 +458,3 @@ def test_small_parallel(n_workers: int = 2, places_per_worker: int = 5):
 
 if __name__ == "__main__":
     main()
-    # test_small_parallel(n_workers=2, places_per_worker=5)
