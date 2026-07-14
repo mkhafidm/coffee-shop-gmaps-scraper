@@ -16,12 +16,13 @@ Edit `config.py` to set `CHROME_VERSION_MAIN`, `MAX_WORKERS`, and file paths.
 
 ### Usage
 
-| Command                                       | What it does                        |
-| :-------------------------------------------- | :---------------------------------- |
-| `python main.py`                              | Run with default config.            |
-| `python main.py --workers 4 --batch-size 100` | Use 4 workers, 50 places per batch. |
-| `python main.py --start 500`                  | Resume from place index 500.        |
-| `python main.py --start 1000 --end 2000`      | Scrape a specific index range.      |
+| Command                                       | What it does                                                    |
+| :-------------------------------------------- | :-------------------------------------------------------------- |
+| `python main.py`                              | Run with default config.                                        |
+| `python main.py --workers 4 --batch-size 100` | Use 4 workers, 100 places per batch.                            |
+| `python main.py --start 500`                  | Resume from place index 500.                                    |
+| `python main.py --start 1000 --end 2000`      | Scrape a specific index range.                                  |
+| `python main.py --batch-start 10`             | Force batch numbering to start at 10 instead of auto-detecting. |
 
 ### Output
 Results go to `data/output/`:

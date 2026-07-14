@@ -80,7 +80,9 @@ def _build_driver(worker_id: int):
     options.add_argument(f"--user-agent={user_agent}")
     if proxy:
         options.add_argument(f"--proxy-server={proxy}")
-
+    
+    options.add_argument("--lang=en-US")
+    options.add_argument("--accept-lang=en-US,en")
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-software-rasterizer")
     options.add_argument("--js-flags=--max-old-space-size=4096")
@@ -347,6 +349,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=config.BATCH_SIZE, help="Size of each batch")
     parser.add_argument("--workers", type=int, default=config.MAX_WORKERS, help="Number of parallel workers")
     parser.add_argument("--output", default=config.OUTPUT_DIR_BASE, help="Output directory")
+    parser.add_argument("--batch-start", type=int, default=None, help="Override starting batch number")
     args = parser.parse_args()
 
     all_place_ids = load_place_ids(args.input)
@@ -363,7 +366,8 @@ def main():
     print(f"Remaining to process: {len(remaining)}")
 
     batches = list(split_into_batches(remaining, args.batch_size))
-    start_batch_number = get_next_batch_number(args.output)
+    start_batch_number = args.batch_start if args.batch_start is not None else get_next_batch_number(args.output)
+    print(f"Batch numbering starts at: {start_batch_number}")
 
     tasks = []
     for i, batch in enumerate(batches):
